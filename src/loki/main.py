@@ -1,7 +1,8 @@
 import uuid
 from pathlib import Path
 
-from pyspark.sql import DataFrame, SparkSession
+import pyspark
+from pyspark.sql import DataFrame, SparkSession, Column
 from pyspark.sql.functions import (
     col,
     max as spark_max,
@@ -9,7 +10,7 @@ from pyspark.sql.functions import (
     to_date,
     add_months,
     try_to_timestamp,
-    lit,
+    lit, countDistinct,
 )
 
 from loki.cleanser import cleanse_customers_data, cleanse_orders_data, cleanse_products_data
@@ -74,39 +75,24 @@ def main() -> None:
     store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
     store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
 
-    print("Top ten countries with the most number of customers")
-    (customers_cleansed.groupby(col("Country"))
-     .count()
-     .withColumnRenamed("count", "CustomerNumber")
-     .orderBy(col("CustomerNumber").desc())
-     .show(10))
+    customers_per_country(customers_cleansed)
 
-    print("Revenue distribution by country")
-    revenue_distribution_by_country: DataFrame = (orders_raw
-                                                  .join(products_raw, on="StockCode", how="inner")
-                                                  .join(customers_raw, on="CustomerID")
-                                                  .withColumn("TotalRevenue", col("UnitPrice") * col("Quantity"))
-                                                  .groupBy(col("Country"))
-                                                  .agg({"TotalRevenue": "sum"})
-                                                  .withColumnRenamed("sum(TotalRevenue)", "Total")
-                                                  .orderBy(col("Total").desc()))
+    revenue_by_country(customers_cleansed, orders_cleansed, products_cleansed)
 
-    revenue_distribution_by_country.show()
+    average_price_sales(orders_cleansed, products_cleansed)
 
-    print("Relationship between average unit price of products and their sales volume.")
-    (orders_raw
-     .join(products_raw, on="StockCode", how="inner")
-     .groupBy(col("StockCode"))
-     .agg({"UnitPrice": "avg", "Quantity": "sum"})
-     .withColumnRenamed("avg(UnitPrice)", "AvgUnitPrice")
-     .withColumnRenamed("sum(Quantity)", "TotalQuantity")
-     .orderBy(col("AvgUnitPrice").desc())
-     .show(10))
+    max_price_drop(orders_cleansed, products_cleansed)
 
+    customers_per_country(customers_cleansed)
+
+    spark.stop()
+
+
+def max_price_drop(orders_cleansed: DataFrame, products_cleansed: DataFrame):
     print("Top 3 products with the maximum unit price drop in the last month")
     # Convert InvoiceDate to timestamp using the actual CSV format.
     # Invalid dates are converted to NULL instead of failing the whole Spark job.
-    orders_with_date = (
+    orders_with_date: DataFrame = (
         orders_cleansed
         .withColumn("InvoiceTimestamp", try_to_timestamp(col("InvoiceDate"), lit("M/d/yyyy H:mm")))
         .withColumn("InvoiceDate", to_date(col("InvoiceTimestamp")))
@@ -115,30 +101,31 @@ def main() -> None:
 
     max_date = orders_with_date.agg(spark_max("InvoiceDate")).collect()[0][0]
 
-    max_date_col = lit(max_date).cast("date")
+    max_date_col: Column = lit(max_date).cast("date")
 
     # Calculate last month's start and end dates based on the latest valid invoice date
-    last_month_start = add_months(last_day(add_months(max_date_col, -2)), 1)
-    last_month_end = last_day(add_months(max_date_col, -1))
+    last_month_start: Column = add_months(last_day(add_months(max_date_col, -2)), 1)
+    last_month_end: Column = last_day(add_months(max_date_col, -1))
 
     # Calculate previous month's start and end dates for comparison
-    previous_month_start = add_months(last_day(add_months(max_date_col, -3)), 1)
-    previous_month_end = last_day(add_months(max_date_col, -2))
+    previous_month_start: Column = add_months(last_day(add_months(max_date_col, -3)), 1)
+    previous_month_end: Column = last_day(add_months(max_date_col, -2))
 
     # Get products with prices from last month
-    last_month_prices = (orders_with_date
-                         .filter((col("InvoiceDate") >= last_month_start) & (col("InvoiceDate") <= last_month_end))
-                         .join(products_cleansed, on="StockCode", how="inner")
-                         .groupBy("StockCode", "Description")
-                         .agg(spark_max("UnitPrice").alias("LastMonthMaxPrice")))
+    last_month_prices: DataFrame = (orders_with_date
+                                    .filter(
+        (col("InvoiceDate") >= last_month_start) & (col("InvoiceDate") <= last_month_end))
+                                    .join(products_cleansed, on="StockCode", how="inner")
+                                    .groupBy("StockCode", "Description")
+                                    .agg(spark_max("UnitPrice").alias("LastMonthMaxPrice")))
 
     # Get products with prices from previous month
-    previous_month_prices = (orders_with_date
-                             .filter(
+    previous_month_prices: DataFrame = (orders_with_date
+                                        .filter(
         (col("InvoiceDate") >= previous_month_start) & (col("InvoiceDate") <= previous_month_end))
-                             .join(products_cleansed, on="StockCode", how="inner")
-                             .groupBy("StockCode")
-                             .agg(spark_max("UnitPrice").alias("PreviousMonthMaxPrice")))
+                                        .join(products_cleansed, on="StockCode", how="inner")
+                                        .groupBy("StockCode")
+                                        .agg(spark_max("UnitPrice").alias("PreviousMonthMaxPrice")))
 
     # Calculate price drop and show top 3
     (last_month_prices
@@ -149,7 +136,48 @@ def main() -> None:
      .select("StockCode", "Description", "PreviousMonthMaxPrice", "LastMonthMaxPrice", "PriceDrop")
      .show(3, truncate=False))
 
-    spark.stop()
+
+def customer_per_country(customers_df: DataFrame) -> None:
+    (customers_df
+     .groupBy("Country")
+     .agg(countDistinct("CustomerID").alias("CustomerCount"))
+     .orderBy(col("CustomerCount").desc())
+     .show(10))
+
+
+def average_price_sales(orders_df: DataFrame, products_raw: DataFrame):
+    print("Relationship between average unit price of products and their sales volume.")
+    (orders_df
+     .join(products_raw, on="StockCode", how="inner")
+     .groupBy(col("StockCode"))
+     .agg({"UnitPrice": "avg", "Quantity": "sum"})
+     .withColumnRenamed("avg(UnitPrice)", "AvgUnitPrice")
+     .withColumnRenamed("sum(Quantity)", "TotalQuantity")
+     .orderBy(col("AvgUnitPrice").desc())
+     .show(10))
+
+
+def revenue_by_country(customers_df: DataFrame, orders_df: DataFrame, products_df: DataFrame):
+    print("Revenue distribution by country")
+    revenue_distribution_by_country: DataFrame = (orders_df
+                                                  .join(products_df, on="StockCode", how="inner")
+                                                  .join(customers_df, on="CustomerID")
+                                                  .withColumn("TotalRevenue", col("UnitPrice") * col("Quantity"))
+                                                  .groupBy(col("Country"))
+                                                  .agg({"TotalRevenue": "sum"})
+                                                  .withColumnRenamed("sum(TotalRevenue)", "Total")
+                                                  .orderBy(col("Total").desc()))
+
+    revenue_distribution_by_country.show()
+
+
+def customers_per_country(customers_cleansed: DataFrame):
+    print("Top ten countries with the most number of customers")
+    (customers_cleansed.groupby(col("Country"))
+     .count()
+     .withColumnRenamed("count", "CustomerNumber")
+     .orderBy(col("CustomerNumber").desc())
+     .show(10))
 
 
 if __name__ == "__main__":
