@@ -6,6 +6,7 @@ from pyspark.sql import DataFrame, SparkSession, Column
 from pyspark.sql.functions import (
     col,
     max as spark_max,
+    sum as spark_sum,
     last_day,
     to_date,
     add_months,
@@ -44,8 +45,6 @@ def main() -> None:
     store_data(orders_raw, orders_raw_output_path, "orders", str(uuid.uuid4()))
     store_data(products_raw, products_raw_output_path, "products", str(uuid.uuid4()))
 
-    # Checking for duplicates if there are any and what they look like
-
     # Cleansing - integration layer
     customers_cleansed: DataFrame = cleanse_customers_data(customers_raw)
 
@@ -56,34 +55,38 @@ def main() -> None:
     # Store integration layer
     output_integration_base_path: Path = Path(base_dir / "data" / "output" / "integration")
 
-    customers_integration_output_path: str = str(output_integration_base_path / "customers")
-    orders_integration_output_path: str = str(output_integration_base_path / "orders")
-    products_integration_output_path: str = str(output_integration_base_path / "products")
+    # customers_integration_output_path: str = str(output_integration_base_path / "customers")
+    # orders_integration_output_path: str = str(output_integration_base_path / "orders")
+    # products_integration_output_path: str = str(output_integration_base_path / "products")
+    #
+    # store_data(customers_cleansed, customers_integration_output_path, "customers", str(uuid.uuid4()))
+    # store_data(orders_cleansed, orders_integration_output_path, "orders", str(uuid.uuid4()))
+    # store_data(products_cleansed, products_integration_output_path, "products", str(uuid.uuid4()))
+    #
+    # # Consumption optimization - curating layer
+    # output_curated_base_path: Path = Path(base_dir / "data" / "output" / "curated")
+    #
+    # customers_curated_output_path: str = str(output_curated_base_path / "dim_customers")
+    # orders_curated_output_path: str = str(output_curated_base_path / "dim_orders")
+    # products_curated_output_path: str = str(output_curated_base_path / "dim_products")
+    #
+    # store_data(customers_cleansed, customers_curated_output_path, "dim_customers", str(uuid.uuid4()))
+    # store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
+    # store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
 
-    store_data(customers_cleansed, customers_integration_output_path, "customers", str(uuid.uuid4()))
-    store_data(orders_cleansed, orders_integration_output_path, "orders", str(uuid.uuid4()))
-    store_data(products_cleansed, products_integration_output_path, "products", str(uuid.uuid4()))
+    # customers_per_country(customers_cleansed)
 
-    # Consumption optimization - curating layer
-    output_curated_base_path: Path = Path(base_dir / "data" / "output" / "curated")
+    # revenue_by_country(customers_cleansed, orders_cleansed, products_cleansed)
 
-    customers_curated_output_path: str = str(output_curated_base_path / "dim_customers")
-    orders_curated_output_path: str = str(output_curated_base_path / "dim_orders")
-    products_curated_output_path: str = str(output_curated_base_path / "dim_products")
+    # average_price_sales(orders_cleansed, products_cleansed)
 
-    store_data(customers_cleansed, customers_curated_output_path, "dim_customers", str(uuid.uuid4()))
-    store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
-    store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
+    # max_price_drop(orders_cleansed, products_cleansed)
 
-    customers_per_country(customers_cleansed)
+    # customers_per_country(customers_cleansed)
 
-    revenue_by_country(customers_cleansed, orders_cleansed, products_cleansed)
+    # customers_buying_most_products(customers_cleansed, orders_cleansed)
 
-    average_price_sales(orders_cleansed, products_cleansed)
-
-    max_price_drop(orders_cleansed, products_cleansed)
-
-    customers_per_country(customers_cleansed)
+    customers_spending_most(orders_cleansed, customers_cleansed, products_cleansed)
 
     spark.stop()
 
@@ -145,7 +148,7 @@ def customer_per_country(customers_df: DataFrame) -> None:
      .show(10))
 
 
-def average_price_sales(orders_df: DataFrame, products_raw: DataFrame):
+def average_price_sales(orders_df: DataFrame, products_raw: DataFrame) -> None:
     print("Relationship between average unit price of products and their sales volume.")
     (orders_df
      .join(products_raw, on="StockCode", how="inner")
@@ -157,7 +160,7 @@ def average_price_sales(orders_df: DataFrame, products_raw: DataFrame):
      .show(10))
 
 
-def revenue_by_country(customers_df: DataFrame, orders_df: DataFrame, products_df: DataFrame):
+def revenue_by_country(customers_df: DataFrame, orders_df: DataFrame, products_df: DataFrame) -> None:
     print("Revenue distribution by country")
     revenue_distribution_by_country: DataFrame = (orders_df
                                                   .join(products_df, on="StockCode", how="inner")
@@ -171,12 +174,32 @@ def revenue_by_country(customers_df: DataFrame, orders_df: DataFrame, products_d
     revenue_distribution_by_country.show()
 
 
-def customers_per_country(customers_cleansed: DataFrame):
+def customers_per_country(customers_cleansed: DataFrame) -> None:
     print("Top ten countries with the most number of customers")
     (customers_cleansed.groupby(col("Country"))
-     .count()
-     .withColumnRenamed("count", "CustomerNumber")
+     .count().alias("CustomerNumber")
      .orderBy(col("CustomerNumber").desc())
+     .show(10))
+
+
+def customers_buying_most_products(customers_cleansed: DataFrame, orders_cleansed: DataFrame) -> None:
+    print("Top ten customers buying the most products")
+    (orders_cleansed
+     .join(customers_cleansed, "CustomerID")
+     .groupby(col("CustomerID"), col("Country"))
+     .agg({"Quantity": "sum"}).alias("TotalQuantity")
+     .orderBy(col("TotalQuantity").desc())
+     .show(10))
+
+
+def customers_spending_most(orders_cleansed: DataFrame, customers_cleansed: DataFrame, products_cleansed: DataFrame) -> None:
+    (orders_cleansed
+     .join(products_cleansed, "StockCode")
+     .join(customers_cleansed, "CustomerID")
+     .withColumn("OrderSpent", col("UnitPrice") * col("Quantity"))
+     .groupBy(col("CustomerID"), col("Country"))
+     .agg(spark_sum("OrderSpent").alias("TotalSpent"))
+     .orderBy(col("TotalSpent").desc())
      .show(10))
 
 
