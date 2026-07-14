@@ -11,7 +11,7 @@ from pyspark.sql.functions import (
     to_date,
     add_months,
     try_to_timestamp,
-    lit, countDistinct,
+    lit, countDistinct, broadcast,
 )
 
 from loki.cleanser import cleanse_customers_data, cleanse_orders_data, cleanse_products_data
@@ -55,36 +55,36 @@ def main() -> None:
     # Store integration layer
     output_integration_base_path: Path = Path(base_dir / "data" / "output" / "integration")
 
-    # customers_integration_output_path: str = str(output_integration_base_path / "customers")
-    # orders_integration_output_path: str = str(output_integration_base_path / "orders")
-    # products_integration_output_path: str = str(output_integration_base_path / "products")
-    #
-    # store_data(customers_cleansed, customers_integration_output_path, "customers", str(uuid.uuid4()))
-    # store_data(orders_cleansed, orders_integration_output_path, "orders", str(uuid.uuid4()))
-    # store_data(products_cleansed, products_integration_output_path, "products", str(uuid.uuid4()))
-    #
-    # # Consumption optimization - curating layer
-    # output_curated_base_path: Path = Path(base_dir / "data" / "output" / "curated")
-    #
-    # customers_curated_output_path: str = str(output_curated_base_path / "dim_customers")
-    # orders_curated_output_path: str = str(output_curated_base_path / "dim_orders")
-    # products_curated_output_path: str = str(output_curated_base_path / "dim_products")
-    #
-    # store_data(customers_cleansed, customers_curated_output_path, "dim_customers", str(uuid.uuid4()))
-    # store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
-    # store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
+    customers_integration_output_path: str = str(output_integration_base_path / "customers")
+    orders_integration_output_path: str = str(output_integration_base_path / "orders")
+    products_integration_output_path: str = str(output_integration_base_path / "products")
 
-    # customers_per_country(customers_cleansed)
+    store_data(customers_cleansed, customers_integration_output_path, "customers", str(uuid.uuid4()))
+    store_data(orders_cleansed, orders_integration_output_path, "orders", str(uuid.uuid4()))
+    store_data(products_cleansed, products_integration_output_path, "products", str(uuid.uuid4()))
 
-    # revenue_by_country(customers_cleansed, orders_cleansed, products_cleansed)
+    # Consumption optimization - curating layer
+    output_curated_base_path: Path = Path(base_dir / "data" / "output" / "curated")
 
-    # average_price_sales(orders_cleansed, products_cleansed)
+    customers_curated_output_path: str = str(output_curated_base_path / "dim_customers")
+    orders_curated_output_path: str = str(output_curated_base_path / "dim_orders")
+    products_curated_output_path: str = str(output_curated_base_path / "dim_products")
 
-    # max_price_drop(orders_cleansed, products_cleansed)
+    store_data(customers_cleansed, customers_curated_output_path, "dim_customers", str(uuid.uuid4()))
+    store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
+    store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
 
-    # customers_per_country(customers_cleansed)
+    customers_per_country(customers_cleansed)
 
-    # customers_buying_most_products(customers_cleansed, orders_cleansed)
+    revenue_by_country(customers_cleansed, orders_cleansed, products_cleansed)
+
+    average_price_sales(orders_cleansed, products_cleansed)
+
+    max_price_drop(orders_cleansed, products_cleansed)
+
+    customers_per_country(customers_cleansed)
+
+    customers_buying_most_products(customers_cleansed, orders_cleansed)
 
     customers_spending_most(orders_cleansed, customers_cleansed, products_cleansed)
 
@@ -195,8 +195,8 @@ def customers_buying_most_products(customers_cleansed: DataFrame, orders_cleanse
 def customers_spending_most(orders_cleansed: DataFrame, customers_cleansed: DataFrame, products_cleansed: DataFrame) -> None:
     print("Top ten customers spending the most")
     (orders_cleansed
-     .join(products_cleansed, "StockCode")
-     .join(customers_cleansed, "CustomerID")
+     .join(broadcast(products_cleansed), "StockCode")
+     .join(broadcast(customers_cleansed), "CustomerID")
      .withColumn("OrderSpent", col("UnitPrice") * col("Quantity"))
      .groupBy(col("CustomerID"), col("Country"))
      .agg(spark_sum("OrderSpent").alias("TotalSpent"))
