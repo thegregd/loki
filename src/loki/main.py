@@ -193,6 +193,7 @@ def customers_buying_most_products(customers_cleansed: DataFrame, orders_cleanse
 
 
 def customers_spending_most(orders_cleansed: DataFrame, customers_cleansed: DataFrame, products_cleansed: DataFrame) -> None:
+    print("Top ten customers spending the most")
     (orders_cleansed
      .join(products_cleansed, "StockCode")
      .join(customers_cleansed, "CustomerID")
