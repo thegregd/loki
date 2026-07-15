@@ -67,11 +67,11 @@ def main() -> None:
     output_curated_base_path: Path = Path(base_dir / "data" / "output" / "curated")
 
     customers_curated_output_path: str = str(output_curated_base_path / "dim_customers")
-    orders_curated_output_path: str = str(output_curated_base_path / "dim_orders")
+    orders_curated_output_path: str = str(output_curated_base_path / "fact_orders")
     products_curated_output_path: str = str(output_curated_base_path / "dim_products")
 
     store_data(customers_cleansed, customers_curated_output_path, "dim_customers", str(uuid.uuid4()))
-    store_data(orders_cleansed, orders_curated_output_path, "dim_orders", str(uuid.uuid4()))
+    store_data(orders_cleansed, orders_curated_output_path, "fact_orders", str(uuid.uuid4()))
     store_data(products_cleansed, products_curated_output_path, "dim_products", str(uuid.uuid4()))
 
     customers_per_country(customers_cleansed)
